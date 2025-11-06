@@ -26,104 +26,77 @@
   @endif
 
   @foreach($messages as $m)
-    <div class="card" style="margin-bottom: 15px; {{ $m['type'] === 'reply' ? 'border-left: 4px solid #007cba; background: #f8f9fa;' : '' }}">
+    <div class="card" style="margin-bottom: 15px;">
       
-      @if($m['type'] === 'reply')
-        <!-- Reply Message Display -->
-        <div style="display: flex; align-items: center; margin-bottom: 8px;">
-          <span style="background: #007cba; color: white; padding: 2px 6px; border-radius: 3px; font-size: 12px; margin-right: 8px;">
-            {{ strtoupper($m['reply_type'] ?? 'REPLY') }}
-          </span>
-          <span style="color: #007cba; font-weight: bold;">You replied</span>
-        </div>
-      @endif
-
       <div><b>{{ $m['subject'] ?? '(no subject)' }}</b></div>
       
       <div>From: 
-        @if($m['type'] === 'reply')
-          <span style="color: #007cba; font-weight: bold;">{{ $m['from_name'] ?? 'You' }}</span>
-          ({{ $m['from_email'] ?? '' }})
-        @else
-          {{ $m['from_email'] ?? '(unknown)' }}
-          @if(!empty($m['from_name']))
-            ({{ $m['from_name'] }})
-          @endif
-        @endif
+      {{ $m['from_email'] ?? '(unknown)' }}
+      @if(!empty($m['from_name']))
+        ({{ $m['from_name'] }})
+      @endif
       </div>
-      
-      @if(!empty($m['toRecipients']))
-        <div>To: {{ collect($m['toRecipients'])->map(fn($r)=>$r['emailAddress']['address']??'')->implode(', ') }}</div>
-      @endif
-      @if(!empty($m['ccRecipients']))
-        <div>CC: {{ collect($m['ccRecipients'])->map(fn($r)=>$r['emailAddress']['address']??'')->implode(', ') }}</div>
-      @endif
       
       <div class="muted">
-        @if($m['type'] === 'reply')
-          Sent: 
-        @else
-          Received: 
-        @endif
-        @php
-          $received = $m['received_at'] ?? null;
-        @endphp
-        {{ $received ? \Carbon\Carbon::parse($received)->format('D d/m/Y h:i A') : '' }}
-        
-        @if($m['type'] === 'reply')
-          <span style="color: #28a745; font-size: 12px; margin-left: 8px;">
-            [{{ strtoupper($m['status'] ?? 'SENT') }}]
-          </span>
-        @endif
+      Received: 
+      @php
+        $received = $m['received_at'] ?? null;
+      @endphp
+      {{ $received ? \Carbon\Carbon::parse($received)->format('D d/m/Y h:i A') : '' }}
       </div>
       
-      <div style="margin-top:8px; background:#fafafa; padding:8px; {{ $m['type'] === 'reply' ? 'border-left: 3px solid #007cba;' : '' }}">
-        {!! $m['body_html'] ?? 'No content' !!}
+      <div style="margin-top:8px; background:#fafafa; padding:8px;">
+      {!! $m['body_html'] ?? 'No content' !!}
       </div>
       
-      @if($m['type'] === 'original')
-        <!-- Only show reply buttons for original messages -->
-        <div style="margin-top:8px;">
-          <button onclick="toggleReplyForm('{{ $m['graph_id'] }}')" class="btn">Reply</button>
-          <button onclick="toggleReplyAllForm('{{ $m['graph_id'] }}')" class="btn" style="background: #f39c12;">Reply All</button>
-        </div>
-        
-        <!-- Reply Form (Initially Hidden) -->
-        <div id="reply-form-{{ $m['graph_id'] }}" style="display: none; margin-top: 15px; background: #f9f9f9; padding: 15px; border-radius: 5px;">
-          <form method="post" action="{{ route('reply.post.inline') }}">
-            @csrf
-            <input type="hidden" name="message_id" value="{{ $m['graph_id'] }}">
-            <input type="hidden" name="conversation_id" value="{{ $cid }}">
-            <input type="hidden" name="reply_type" value="reply">
-            
-            <div style="margin-bottom: 10px;">
-              <label><strong>Reply:</strong></label>
-              <textarea name="comment" rows="4" style="width: 100%; padding: 8px;" placeholder="Type your reply here..." required></textarea>
-            </div>
-            
-            <button type="submit" class="btn">Send Reply</button>
-            <button type="button" onclick="toggleReplyForm('{{ $m['graph_id'] }}')" class="btn" style="background: #95a5a6; margin-left: 10px;">Cancel</button>
-          </form>
-        </div>
-        
-        <!-- Reply All Form (Initially Hidden) -->
-        <div id="replyall-form-{{ $m['graph_id'] }}" style="display: none; margin-top: 15px; background: #f9f9f9; padding: 15px; border-radius: 5px;">
-          <form method="post" action="{{ route('reply.post.inline') }}">
-            @csrf
-            <input type="hidden" name="message_id" value="{{ $m['graph_id'] }}">
-            <input type="hidden" name="conversation_id" value="{{ $cid }}">
-            <input type="hidden" name="reply_type" value="reply_all">
-            
-            <div style="margin-bottom: 10px;">
-              <label><strong>Reply All:</strong></label>
-              <textarea name="comment" rows="4" style="width: 100%; padding: 8px;" placeholder="Type your reply to all recipients..." required></textarea>
-            </div>
-            
-            <button type="submit" class="btn">Send Reply All</button>
-            <button type="button" onclick="toggleReplyAllForm('{{ $m['graph_id'] }}')" class="btn" style="background: #95a5a6; margin-left: 10px;">Cancel</button>
-          </form>
-        </div>
-      @endif
+      <!-- You replied badge for our reply messages -->
+      {{-- @if(!empty($m['from_email']) && $m['from_email'])
+      <span style="display: inline-block; background: #27ae60; color: #fff; padding: 5px 10px; border-radius: 12px; font-size: 0.95em; margin-top: 8px;">
+        You replied
+      </span>
+      @endif --}}
+
+      <!-- Reply buttons for all messages -->
+      <div style="margin-top:8px;">
+      <button onclick="toggleReplyForm('{{ $m['graph_id'] }}')" class="btn">Reply</button>
+      <button onclick="toggleReplyAllForm('{{ $m['graph_id'] }}')" class="btn" style="background: #f39c12;">Reply All</button>
+      </div>
+      
+      <!-- Reply Form (Initially Hidden) -->
+      <div id="reply-form-{{ $m['graph_id'] }}" style="display: none; margin-top: 15px; background: #f9f9f9; padding: 15px; border-radius: 5px;">
+        <form method="post" action="{{ route('reply.post.inline') }}">
+          @csrf
+          <input type="hidden" name="message_id" value="{{ $m['graph_id'] }}">
+          <input type="hidden" name="conversation_id" value="{{ $cid }}">
+          <input type="hidden" name="reply_type" value="reply">
+          
+          <div style="margin-bottom: 10px;">
+            <label><strong>Reply:</strong></label>
+            <textarea name="comment" rows="4" style="width: 100%; padding: 8px;" placeholder="Type your reply here..." required></textarea>
+          </div>
+          
+          <button type="submit" class="btn">Send Reply</button>
+          <button type="button" onclick="toggleReplyForm('{{ $m['graph_id'] }}')" class="btn" style="background: #95a5a6; margin-left: 10px;">Cancel</button>
+        </form>
+      </div>
+      
+      <!-- Reply All Form (Initially Hidden) -->
+      <div id="replyall-form-{{ $m['graph_id'] }}" style="display: none; margin-top: 15px; background: #f9f9f9; padding: 15px; border-radius: 5px;">
+        <form method="post" action="{{ route('reply.post.inline') }}">
+          @csrf
+          <input type="hidden" name="message_id" value="{{ $m['graph_id'] }}">
+          <input type="hidden" name="conversation_id" value="{{ $cid }}">
+          <input type="hidden" name="reply_type" value="reply_all">
+          
+          <div style="margin-bottom: 10px;">
+            <label><strong>Reply All:</strong></label>
+            <textarea name="comment" rows="4" style="width: 100%; padding: 8px;" placeholder="Type your reply to all recipients..." required></textarea>
+          </div>
+          
+          <button type="submit" class="btn">Send Reply All</button>
+          <button type="button" onclick="toggleReplyAllForm('{{ $m['graph_id'] }}')" class="btn" style="background: #95a5a6; margin-left: 10px;">Cancel</button>
+        </form>
+      </div>
     </div>
   @endforeach
 

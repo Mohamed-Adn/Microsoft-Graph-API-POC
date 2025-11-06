@@ -146,6 +146,8 @@ class MailController extends Controller
         // Get unread count for sidebar
         $unreadCount = $svc->getUnreadCount();
 
+        \Log::info('Thread messages: ' . print_r($messages, true));
+
         return view('thread', compact('messages', 'cid', 'unreadCount'));
     }
 
@@ -196,29 +198,22 @@ class MailController extends Controller
         return view('reply', ['id' => $id, 'unreadCount' => $unreadCount]);
     }
 
-    public function replyPost(Request $req, GraphService $graph)
+    public function replyPost(Request $req, GraphService $graph, GraphMailSyncService $svc)
     {
         $req->validate(['id'=>'required', 'comment'=>'required']);
     
         // 1) call Graph (reply)
         $graph->graph('POST', "/me/messages/{$req->id}/reply", ['comment'=>$req->comment]);
     
-        // 2) persist “who replied” locally
-        $dummyUser = \App\Models\User::where('email','agent@example.com')->first();
+        // 2) Get the original message to find conversation ID
         $orig = \App\Models\MailMessage::where('graph_id', $req->id)->first();
     
-        \App\Models\MailReply::create([
-            'mail_message_id' => optional($orig)->id,
-            'user_id'         => $dummyUser?->id ?? 1,
-            'kind'            => 'reply',
-            'body_html'       => $req->comment,
-            'sent_at'         => now(),
-            'status'          => 'sent',
-            // 'graph_message_id' => null, // could fill if you send via /sendMail and capture response
-        ]);
-    
-        // 3) (optional) refresh conversation cache so UI shows the new item
-        if ($orig) app(\App\Services\GraphMailSyncService::class)->refreshConversationCache($orig->conversation_id);
+        // 3) Refresh conversation cache to get the updated thread with the reply
+        if ($orig) {
+            $svc->clearConversationCache($orig->conversation_id);
+            // Force fetch fresh messages for this conversation from Graph API
+            $svc->refreshConversationCache($orig->conversation_id);
+        }
     
         return back()->with('ok', 'Replied successfully.');
     }
@@ -274,11 +269,11 @@ class MailController extends Controller
                 $response = $graph->graph('POST', "/me/messages/{$messageId}/reply", $replyPayload);
             }
 
-            // Store the reply in our database
-            $this->storeReplyInDatabase($messageId, $comment, $replyType, $response);
-            
-            // Clear the conversation cache to force refresh
+            // Clear the conversation cache to force refresh and fetch the reply from Graph API
             $svc->clearConversationCache($conversationId);
+            
+            // Force refresh the conversation to get updated messages including the reply
+            $svc->refreshConversationCache($conversationId);
             
             // Mark the conversation as read since user replied
             $svc->markConversationAsRead($conversationId);
@@ -290,31 +285,6 @@ class MailController extends Controller
             \Log::error('Reply failed: ' . $e->getMessage());
             return redirect()->route('thread', ['cid' => $req->conversation_id])
                 ->with('error', 'Failed to send reply: ' . $e->getMessage());
-        }
-    }
-
-    private function storeReplyInDatabase($messageId, $comment, $replyType, $graphResponse = null)
-    {
-        try {
-            // Get the original message from database
-            $originalMessage = \App\Models\MailMessage::where('graph_id', $messageId)->first();
-            
-            if ($originalMessage) {
-                \App\Models\MailReply::create([
-                    'mail_message_id' => $originalMessage->id,
-                    'user_id' => 1, // Using dummy user
-                    'kind' => $replyType,
-                    'body_html' => nl2br(e($comment)),
-                    'sent_at' => now(),
-                    'status' => 'sent',
-                    'graph_message_id' => $graphResponse['id'] ?? null,
-                    'raw' => $graphResponse ? json_encode($graphResponse) : null,
-                ]);
-                
-                \Log::info('Stored reply for message: ' . $messageId);
-            }
-        } catch (\Exception $e) {
-            \Log::error('Failed to store reply in database: ' . $e->getMessage());
         }
     }
 

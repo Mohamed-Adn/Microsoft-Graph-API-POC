@@ -25,24 +25,47 @@
     </div>
   @endif
 
+  @php
+    // Get the current user's email address from session token or a known value
+    $userEmail = session('user_email') ?? 'your-email@domain.com'; // You'll need to set this based on your auth
+    
+    // You can also extract it from the access token if available
+    if (session()->has('access_token')) {
+        $token = session('access_token');
+        $tokenParts = explode(".", $token);
+        if (count($tokenParts) >= 2) {
+            $payload = json_decode(base64_decode(strtr($tokenParts[1], '-_', '+/')), true);
+            $userEmail = $payload['preferred_username'] ?? $payload['email'] ?? $userEmail;
+        }
+    }
+  @endphp
+
   @foreach($messages as $m)
-    <div class="card" style="margin-bottom: 15px; {{ $m['type'] === 'reply' ? 'border-left: 4px solid #007cba; background: #f8f9fa;' : '' }}">
+    @php
+      // Determine if this message is from the current user (a reply they sent)
+      $isFromUser = ($m['from_email'] ?? '') === $userEmail;
+      $isReply = $isFromUser && str_starts_with(strtolower($m['subject'] ?? ''), 're:');
+    @endphp
+    
+    <div class="card" style="margin-bottom: 15px; {{ $isFromUser ? 'border-left: 4px solid #007cba; background: #f8f9ff;' : '' }}">
       
-      @if($m['type'] === 'reply')
-        <!-- Reply Message Display -->
+      @if($isFromUser)
+        <!-- This is a message from the current user (their reply) -->
         <div style="display: flex; align-items: center; margin-bottom: 8px;">
           <span style="background: #007cba; color: white; padding: 2px 6px; border-radius: 3px; font-size: 12px; margin-right: 8px;">
-            {{ strtoupper($m['reply_type'] ?? 'REPLY') }}
+            {{ $isReply ? 'REPLY' : 'SENT' }}
           </span>
-          <span style="color: #007cba; font-weight: bold;">You replied</span>
+          <span style="color: #007cba; font-weight: bold;">
+            {{ $isReply ? 'You replied' : 'You sent' }}
+          </span>
         </div>
       @endif
 
       <div><b>{{ $m['subject'] ?? '(no subject)' }}</b></div>
       
       <div>From: 
-        @if($m['type'] === 'reply')
-          <span style="color: #007cba; font-weight: bold;">{{ $m['from_name'] ?? 'You' }}</span>
+        @if($isFromUser)
+          <span style="color: #007cba; font-weight: bold;">You</span>
           ({{ $m['from_email'] ?? '' }})
         @else
           {{ $m['from_email'] ?? '(unknown)' }}
@@ -52,37 +75,26 @@
         @endif
       </div>
       
-      @if(!empty($m['toRecipients']))
-        <div>To: {{ collect($m['toRecipients'])->map(fn($r)=>$r['emailAddress']['address']??'')->implode(', ') }}</div>
-      @endif
-      @if(!empty($m['ccRecipients']))
-        <div>CC: {{ collect($m['ccRecipients'])->map(fn($r)=>$r['emailAddress']['address']??'')->implode(', ') }}</div>
-      @endif
-      
       <div class="muted">
-        @if($m['type'] === 'reply')
-          Sent: 
-        @else
-          Received: 
-        @endif
+        {{ $isFromUser ? 'Sent:' : 'Received:' }}
         @php
           $received = $m['received_at'] ?? null;
         @endphp
         {{ $received ? \Carbon\Carbon::parse($received)->format('D d/m/Y h:i A') : '' }}
         
-        @if($m['type'] === 'reply')
+        @if($isFromUser)
           <span style="color: #28a745; font-size: 12px; margin-left: 8px;">
-            [{{ strtoupper($m['status'] ?? 'SENT') }}]
+            [DELIVERED]
           </span>
         @endif
       </div>
       
-      <div style="margin-top:8px; background:#fafafa; padding:8px; {{ $m['type'] === 'reply' ? 'border-left: 3px solid #007cba;' : '' }}">
+      <div style="margin-top:8px; background:#fafafa; padding:8px; {{ $isFromUser ? 'border-left: 3px solid #007cba;' : '' }}">
         {!! $m['body_html'] ?? 'No content' !!}
       </div>
       
-      @if($m['type'] === 'original')
-        <!-- Only show reply buttons for original messages -->
+      @if(!$isFromUser)
+        <!-- Only show reply buttons for messages from others (not your own messages) -->
         <div style="margin-top:8px;">
           <button onclick="toggleReplyForm('{{ $m['graph_id'] }}')" class="btn">Reply</button>
           <button onclick="toggleReplyAllForm('{{ $m['graph_id'] }}')" class="btn" style="background: #f39c12;">Reply All</button>
