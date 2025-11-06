@@ -1,6 +1,16 @@
 @extends('layout')
 @section('content')
-  <h2>Thread</h2>
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+    <h2>Thread</h2>
+    <div>
+      <a href="{{ route('thread', ['cid' => $cid]) }}" style="background: #28a745; color: white; padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 12px;">
+        🔄 Refresh Thread
+      </a>
+      <a href="{{ route('inbox') }}" style="background: #6c757d; color: white; padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 12px; margin-left: 8px;">
+        ← Back to Inbox
+      </a>
+    </div>
+  </div>
   
   @if(session('success'))
     <div class="card" style="background:#f0fff0; margin-bottom: 10px; padding: 10px;">{{ session('success') }}</div>

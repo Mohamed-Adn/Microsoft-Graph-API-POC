@@ -24,7 +24,7 @@ class AuthController extends Controller
         return redirect()->route('home');
     }
 
-    public function logout(GraphService $grpah)
+    public function logout(GraphService $graph)
     {
         $graph->clearToken();
         return redirect()->route('home');

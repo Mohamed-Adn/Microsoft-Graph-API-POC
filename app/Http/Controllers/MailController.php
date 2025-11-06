@@ -16,11 +16,20 @@ class MailController extends Controller
 
     public function inbox(GraphMailSyncService $svc)
     {
+        // Auto-check for new messages on inbox access (without blocking the UI)
+        try {
+            $newCount = $svc->fetchNewMessages();
+            if ($newCount > 0) {
+                \Log::info("Auto-detected {$newCount} new messages");
+            }
+        } catch (\Exception $e) {
+            \Log::error('Auto-refresh failed: ' . $e->getMessage());
+        }
+
         $heads = $svc->getConversationListFromCache();
     
         // Debug: Log what we got from cache
         \Log::info('Cache heads count: ' . count($heads));
-        \Log::info('Cache heads sample: ' . json_encode(array_slice($heads, 0, 2)));
     
         // 2) lazy rebuild from DB if cache is cold
         if (empty($heads)) {
@@ -29,7 +38,6 @@ class MailController extends Controller
             
             // Debug: Log after refresh
             \Log::info('After refresh heads count: ' . count($heads));
-            \Log::info('After refresh heads sample: ' . json_encode(array_slice($heads, 0, 2)));
         }
     
         // 3) your existing view expects "groups" => array grouped by conversationId
@@ -37,12 +45,12 @@ class MailController extends Controller
         foreach ($heads as $head) {
             if (empty($head['conversation_id'])) { continue; }
             $cid = $head['conversation_id'];
-            $groups[$cid] = [$head];
+            // Each conversation head represents all messages in that conversation
+            $groups[$cid] = [$head]; // Keep as single item array for compatibility
         }
     
         // Debug: Log final groups
         \Log::info('Final groups count: ' . count($groups));
-        \Log::info('Final groups sample: ' . json_encode(array_slice($groups, 0, 1, true)));
     
         return view('inbox', compact('groups'));
     }
@@ -51,6 +59,18 @@ class MailController extends Controller
     {
         $cid = $req->query('cid');
         abort_if(!$cid, 400, 'Missing conversation id');
+
+        // Auto-check for new messages in this conversation
+        try {
+            $newCount = $svc->fetchNewMessages();
+            if ($newCount > 0) {
+                \Log::info("Auto-detected {$newCount} new messages while viewing thread");
+                // Clear this conversation's cache to get updated messages
+                $svc->clearConversationCache($cid);
+            }
+        } catch (\Exception $e) {
+            \Log::error('Auto-refresh failed in thread: ' . $e->getMessage());
+        }
 
         // 1) try cache
         $messages = $svc->getConversationFromCache($cid);
