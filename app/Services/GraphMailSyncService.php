@@ -7,6 +7,8 @@ use App\Models\MailRecipient;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Arr;
+use Carbon\Carbon;
 
 class GraphMailSyncService
 {
@@ -56,29 +58,36 @@ class GraphMailSyncService
         }
     }
 
-    protected function buildConversationHeadsFromDatabase()
+    public function buildConversationHeadsFromDatabase()
     {
-        // Get the latest message per conversation from database
-        $messages = MailMessage::select('*')
-            ->whereIn('id', function($query) {
-                $query->select(\DB::raw('MAX(id)'))
-                    ->from('mail_messages')
-                    ->groupBy('conversation_id');
-            })
-            ->orderBy('received_at', 'desc')
+        // Get conversation data with message counts
+        $conversations = MailMessage::select('conversation_id')
+            ->selectRaw('COUNT(*) as message_count')
+            ->selectRaw('MAX(received_at) as latest_received_at')
+            ->selectRaw('MIN(is_read) as has_unread') // 0 if any unread, 1 if all read
+            ->groupBy('conversation_id')
+            ->orderBy('latest_received_at', 'desc')
             ->get();
 
         $heads = [];
-        foreach ($messages as $msg) {
-            $heads[] = [
-                'id' => $msg->graph_id,
-                'conversation_id' => $msg->conversation_id,
-                'subject' => $msg->subject ?? '(No Subject)',
-                'from_email' => $msg->from_email ?? '',
-                'from_name' => $msg->from_name ?? '',
-                'received_at' => $msg->received_at ? $msg->received_at->format('Y-m-d H:i:s') : null,
-                'is_read' => $msg->is_read,
-            ];
+        foreach ($conversations as $conv) {
+            // Get the latest message for this conversation
+            $latestMessage = MailMessage::where('conversation_id', $conv->conversation_id)
+                ->orderBy('received_at', 'desc')
+                ->first();
+
+            if ($latestMessage) {
+                $heads[] = [
+                    'id' => $latestMessage->graph_id,
+                    'conversation_id' => $conv->conversation_id,
+                    'subject' => $latestMessage->subject ?? '(No Subject)',
+                    'from_email' => $latestMessage->from_email ?? '',
+                    'from_name' => $latestMessage->from_name ?? '',
+                    'received_at' => $latestMessage->received_at ? $latestMessage->received_at->format('Y-m-d H:i:s') : null,
+                    'is_read' => $conv->has_unread == 1, // true if all messages are read
+                    'message_count' => $conv->message_count,
+                ];
+            }
         }
 
         Log::info('Built ' . count($heads) . ' conversation heads from database');
@@ -103,7 +112,7 @@ protected function storeMessagesInDatabase(array $messages): void
 
             // Ensure we have full fields (list often lacks 'body')
             if (!Arr::has($msg, 'body.content')) {
-                $detail = $this->graph->graph(
+                $detail = $this->graphService->graph(
                     'GET',
                     '/me/messages/' . rawurlencode($graphId) . '?' . http_build_query([
                         '$select' => 'internetMessageId,conversationId,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,body'
@@ -260,37 +269,153 @@ protected function storeMessagesInDatabase(array $messages): void
     public function refreshConversationCache($conversationId)
     {
         try {
-            // Get messages with replies from database
+            Log::info("Refreshing conversation cache for: {$conversationId}");
+            
+            // Always fetch from Graph API to ensure we have all messages in the conversation
+            $response = $this->graphService->graph('GET', "/me/messages?\$filter=conversationId eq '{$conversationId}'&\$orderby=receivedDateTime asc&\$select=id,conversationId,subject,from,receivedDateTime,isRead,body,toRecipients,ccRecipients,bccRecipients,internetMessageId");
+            $apiMessages = $response['value'] ?? [];
+            
+            Log::info("Found {count($apiMessages)} messages for conversation {$conversationId} from Graph API");
+
+            // Store the fetched messages in database (this will handle duplicates)
+            if (!empty($apiMessages)) {
+                $this->storeMessagesInDatabase($apiMessages);
+            }
+            
+            // Now get messages with replies from database
             $messages = $this->getConversationWithReplies($conversationId);
+            
+            Log::info("Final conversation has " . count($messages) . " messages including replies");
     
             if (!empty($messages)) {
                 Cache::put("conversation_{$conversationId}", $messages, 300);
                 return $messages;
             }
-    
-            // If not in database, fetch from Graph API
-            $response = $this->graphService->graph('GET', "/me/messages?\$filter=conversationId eq '{$conversationId}'&\$orderby=receivedDateTime asc");
-            $apiMessages = $response['value'] ?? [];
-    
-            // Store the fetched messages in database
-            $this->storeMessagesInDatabase($apiMessages);
             
-            // Get from database again with replies to ensure consistency
-            $messages = $this->getConversationWithReplies($conversationId);
-    
-            Cache::put("conversation_{$conversationId}", $messages, 300);
-            return $messages;
+            Log::warning("No messages found for conversation: {$conversationId}");
+            return [];
     
         } catch (\Exception $e) {
             Log::error('Error fetching conversation: ' . $e->getMessage());
+            Log::error('Conversation ID: ' . $conversationId);
+            
+            // Fallback: try to get from database only
+            try {
+                $messages = $this->getConversationWithReplies($conversationId);
+                if (!empty($messages)) {
+                    Cache::put("conversation_{$conversationId}", $messages, 300);
+                    Log::info("Fallback: Got conversation from database with " . count($messages) . " messages");
+                    return $messages;
+                }
+            } catch (\Exception $fallbackError) {
+                Log::error('Fallback also failed: ' . $fallbackError->getMessage());
+            }
+            
             return [];
         }
     }
 
-    public function syncMailbox()
+    /**
+     * Fetch only new messages that don't exist in database
+     */
+    public function fetchNewMessages()
     {
-        Log::info('Starting mailbox sync...');
-        $this->refreshConversationListCache();
+        try {
+            // Get the latest message timestamp from database
+            $latestMessage = MailMessage::orderBy('received_at', 'desc')->first();
+            
+            $filterQuery = '/me/messages?$top=50&$orderby=receivedDateTime desc&$select=id,conversationId,subject,from,receivedDateTime,isRead,body,toRecipients,ccRecipients,bccRecipients,internetMessageId';
+            
+            // If we have existing messages, only fetch newer ones
+            if ($latestMessage && $latestMessage->received_at) {
+                // Use the correct datetime format for Microsoft Graph API
+                $lastSync = $latestMessage->received_at->utc()->format('Y-m-d\TH:i:s.000\Z');
+                $filterQuery .= "&\$filter=receivedDateTime gt " . $lastSync;
+                Log::info('Fetching messages newer than: ' . $lastSync);
+                Log::info('Filter query: ' . $filterQuery);
+            } else {
+                Log::info('No existing messages, fetching all recent messages');
+            }
+
+            $response = $this->graphService->graph('GET', $filterQuery);
+            $newMessages = $response['value'] ?? [];
+
+            Log::info('Fetched ' . count($newMessages) . ' new messages from Graph API');
+
+            // Log details about the returned messages
+            if (!empty($newMessages)) {
+                Log::info('New messages details:');
+                foreach ($newMessages as $msg) {
+                    Log::info('- Message: ' . ($msg['subject'] ?? 'No Subject') . ' from ' . ($msg['from']['emailAddress']['address'] ?? 'Unknown') . ' at ' . ($msg['receivedDateTime'] ?? 'Unknown time'));
+                }
+            }
+
+            if (!empty($newMessages)) {
+                // Store only new messages
+                $this->storeMessagesInDatabase($newMessages);
+                
+                // Clear cache to force refresh
+                $this->clearConversationListCache();
+                
+                Log::info('Stored ' . count($newMessages) . ' new messages');
+                return count($newMessages);
+            }
+
+            return 0;
+
+        } catch (\Exception $e) {
+            Log::error('Error fetching new messages: ' . $e->getMessage());
+            Log::error('Exception details: ' . $e->getTraceAsString());
+            
+            // Fallback: try to fetch some recent messages without filter
+            try {
+                Log::info('Attempting fallback fetch without date filter...');
+                $response = $this->graphService->graph('GET', '/me/messages?$top=10&$orderby=receivedDateTime desc&$select=id,conversationId,subject,from,receivedDateTime,isRead,body,toRecipients,ccRecipients,bccRecipients,internetMessageId');
+                $messages = $response['value'] ?? [];
+                
+                Log::info('Fallback fetched ' . count($messages) . ' messages');
+                
+                $newCount = 0;
+                foreach ($messages as $msg) {
+                    $existing = MailMessage::where('graph_id', $msg['id'])->first();
+                    if (!$existing) {
+                        $this->storeMessagesInDatabase([$msg]);
+                        $newCount++;
+                        Log::info('Fallback found new message: ' . ($msg['subject'] ?? 'No Subject'));
+                    }
+                }
+                
+                if ($newCount > 0) {
+                    $this->clearConversationListCache();
+                    Log::info("Fallback: Found {$newCount} new messages");
+                }
+                
+                return $newCount;
+                
+            } catch (\Exception $fallbackError) {
+                Log::error('Fallback fetch also failed: ' . $fallbackError->getMessage());
+                return 0;
+            }
+        }
+    }
+
+    /**
+     * Sync mailbox with option to fetch only new messages
+     */
+    public function syncMailbox($fullSync = false)
+    {
+        Log::info('Starting mailbox sync...' . ($fullSync ? ' (full sync)' : ' (incremental sync)'));
+        
+        if ($fullSync) {
+            $this->refreshConversationListCache();
+        } else {
+            $newCount = $this->fetchNewMessages();
+            // Rebuild conversation heads after fetching new messages
+            $heads = $this->buildConversationHeadsFromDatabase();
+            Cache::put('conversation_list', $heads, 300);
+            Log::info("Incremental sync completed. Found {$newCount} new messages.");
+        }
+        
         Log::info('Mailbox sync completed.');
     }
 
