@@ -26,6 +26,20 @@
     </div>
   @endif
 
+  @php
+    // Get the current user's email for identifying their messages
+    $userEmail = session('user_email') ?? 'your-email@domain.com';
+    
+    if (session()->has('access_token')) {
+        $token = session('access_token');
+        $tokenParts = explode(".", $token);
+        if (count($tokenParts) >= 2) {
+            $payload = json_decode(base64_decode(strtr($tokenParts[1], '-_', '+/')), true);
+            $userEmail = $payload['preferred_username'] ?? $payload['email'] ?? $userEmail;
+        }
+    }
+  @endphp
+
   @if(empty($groups))
     <div class="card" style="text-align: center; padding: 40px;">
       <h3 style="color: #7f8c8d; margin-bottom: 10px;">📭 No Messages</h3>
@@ -37,16 +51,24 @@
   @else
     <div style="background: white; border-radius: 8px; overflow: hidden; border: 1px solid #ddd;">
       <div style="background: #f8f9fa; padding: 15px; border-bottom: 1px solid #ddd; font-weight: bold; color: #2c3e50;">
-        📧 Messages ({{ count($groups) }} conversations)
+        📧 Conversations ({{ count($groups) }} total)
       </div>
       
       @foreach($groups as $cid => $msgs)
-        @php $head = $msgs[0]; @endphp
+        @php 
+          $head = $msgs[0];
+          $isFromUser = ($head['from_email'] ?? '') === $userEmail;
+          $latestActivity = \Carbon\Carbon::parse($head['latest_received_at'] ?? $head['received_at']);
+        @endphp
         <div style="padding: 15px; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 15px; {{ !$head['is_read'] ? 'background: #f8f9ff;' : '' }} cursor: pointer; transition: all 0.2s ease;"
              onclick="window.location.href='{{ route('thread', ['cid'=>$cid]) }}'">
           
           <div style="width: 40px; height: 40px; background: {{ !$head['is_read'] ? '#3498db' : '#95a5a6' }}; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 14px;">
-            {{ strtoupper(substr($head['from_name'] ?? $head['from_email'] ?? 'U', 0, 1)) }}
+            @if($isFromUser)
+              {{ strtoupper(substr('You', 0, 1)) }}
+            @else
+              {{ strtoupper(substr($head['from_name'] ?? $head['from_email'] ?? 'U', 0, 1)) }}
+            @endif
           </div>
           
           <div style="flex: 1; min-width: 0;">
@@ -59,18 +81,34 @@
                   NEW
                 </span>
               @endif
+              @if(($head['message_count'] ?? 1) > 1)
+                <span style="background: #f39c12; color: white; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold;">
+                  {{ $head['message_count'] }} MSGS
+                </span>
+              @endif
             </div>
             
             <div style="color: #7f8c8d; font-size: 14px;">
-              From: {{ $head['from_email'] ?? '(unknown)' }}
-              @if(!empty($head['from_name']))
-                ({{ $head['from_name'] }})
+              @if($isFromUser)
+                <span style="color: #007cba; font-weight: bold;">You started this conversation</span>
+              @else
+                From: {{ $head['from_email'] ?? '(unknown)' }}
+                @if(!empty($head['from_name']))
+                  ({{ $head['from_name'] }})
+                @endif
+              @endif
+            </div>
+            
+            <div style="color: #95a5a6; font-size: 12px; margin-top: 2px;">
+              Started: {{ $head['received_at'] ? \Carbon\Carbon::parse($head['received_at'])->format('M d, Y') : '' }}
+              @if(isset($head['latest_received_at']) && $head['latest_received_at'] !== $head['received_at'])
+                • Last activity: {{ $latestActivity->diffForHumans() }}
               @endif
             </div>
           </div>
           
           <div style="text-align: right; color: #7f8c8d; font-size: 12px;">
-            <div>{{ $head['received_at'] ? \Carbon\Carbon::parse($head['received_at'])->format('M d') : '' }}</div>
+            <div>{{ $latestActivity->format('M d') }}</div>
             <div style="margin-top: 2px;">{{ $head['message_count'] ?? 1 }} msg{{ ($head['message_count'] ?? 1) > 1 ? 's' : '' }}</div>
           </div>
         </div>

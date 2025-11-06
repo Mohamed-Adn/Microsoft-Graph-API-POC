@@ -58,41 +58,59 @@ class GraphMailSyncService
         }
     }
 
-    public function buildConversationHeadsFromDatabase()
-    {
-        // Get conversation data with message counts
+public function buildConversationHeadsFromDatabase()
+{
+    try {
+        // Get all conversations and their message counts
         $conversations = MailMessage::select('conversation_id')
             ->selectRaw('COUNT(*) as message_count')
             ->selectRaw('MAX(received_at) as latest_received_at')
-            ->selectRaw('MIN(is_read) as has_unread') // 0 if any unread, 1 if all read
+            ->selectRaw('MIN(received_at) as first_received_at')
+            ->whereNotNull('conversation_id')
             ->groupBy('conversation_id')
-            ->orderBy('latest_received_at', 'desc')
             ->get();
 
         $heads = [];
+
         foreach ($conversations as $conv) {
-            // Get the latest message for this conversation
-            $latestMessage = MailMessage::where('conversation_id', $conv->conversation_id)
-                ->orderBy('received_at', 'desc')
+            // Always get the FIRST (original) message in the conversation, not the latest
+            $firstMessage = MailMessage::where('conversation_id', $conv->conversation_id)
+                ->orderBy('received_at', 'asc') // Get the FIRST message (original)
                 ->first();
 
-            if ($latestMessage) {
-                $heads[] = [
-                    'id' => $latestMessage->graph_id,
-                    'conversation_id' => $conv->conversation_id,
-                    'subject' => $latestMessage->subject ?? '(No Subject)',
-                    'from_email' => $latestMessage->from_email ?? '',
-                    'from_name' => $latestMessage->from_name ?? '',
-                    'received_at' => $latestMessage->received_at ? $latestMessage->received_at->format('Y-m-d H:i:s') : null,
-                    'is_read' => $conv->has_unread == 1, // true if all messages are read
-                    'message_count' => $conv->message_count,
-                ];
-            }
+            if (!$firstMessage) continue;
+
+            // Check if there are any unread messages in this conversation
+            $hasUnreadMessages = MailMessage::where('conversation_id', $conv->conversation_id)
+                ->where('is_read', false)
+                ->exists();
+
+            $heads[] = [
+                'conversation_id' => $conv->conversation_id,
+                'subject' => $firstMessage->subject, // Always show original subject
+                'from_email' => $firstMessage->from_email, // Always show original sender
+                'from_name' => $firstMessage->from_name, // Always show original sender name
+                'received_at' => $firstMessage->received_at, // Show when original was received
+                'latest_received_at' => $conv->latest_received_at, // Keep track of latest activity
+                'message_count' => $conv->message_count,
+                'is_read' => !$hasUnreadMessages, // Conversation is read only if ALL messages are read
+                'body_html' => $firstMessage->body_html,
+                'body_text' => $firstMessage->body_text,
+            ];
         }
 
-        Log::info('Built ' . count($heads) . ' conversation heads from database');
+        // Sort by latest activity (most recent conversation activity first)
+        usort($heads, function ($a, $b) {
+            return strtotime($b['latest_received_at']) <=> strtotime($a['latest_received_at']);
+        });
+
         return $heads;
+
+    } catch (\Exception $e) {
+        Log::error('Error building conversation heads from database: ' . $e->getMessage());
+        return [];
     }
+}
 
 protected function storeMessagesInDatabase(array $messages): void
 {
