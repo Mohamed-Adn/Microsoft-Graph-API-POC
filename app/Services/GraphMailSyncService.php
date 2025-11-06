@@ -479,4 +479,9 @@ protected function storeMessagesInDatabase(array $messages): void
             return [];
         }
     }
+
+    public function getUnreadCount()
+    {
+        return MailMessage::where('is_read', false)->count();
+    }
 }
