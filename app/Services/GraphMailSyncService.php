@@ -422,15 +422,15 @@ protected function storeMessagesInDatabase(array $messages): void
     public function getConversationWithReplies($conversationId)
     {
         try {
-            // Get original messages from database
-            $originalMessages = MailMessage::where('conversation_id', $conversationId)
+            // Get messages from database (these come from Graph API and include replies)
+            $messages = MailMessage::where('conversation_id', $conversationId)
                 ->orderBy('received_at', 'asc')
                 ->get();
     
             $allMessages = [];
     
-            foreach ($originalMessages as $message) {
-                // Add the original message
+            foreach ($messages as $message) {
+                // Add all messages (original and replies come from Graph API)
                 $allMessages[] = [
                     'type' => 'original',
                     'id' => $message->graph_id,
@@ -444,27 +444,6 @@ protected function storeMessagesInDatabase(array $messages): void
                     'is_read' => $message->is_read,
                     'timestamp' => $message->received_at ? $message->received_at->timestamp : 0,
                 ];
-    
-                // Get replies for this message
-                $replies = $message->replies()->orderBy('sent_at', 'asc')->get();
-                
-                foreach ($replies as $reply) {
-                    $allMessages[] = [
-                        'type' => 'reply',
-                        'id' => 'reply_' . $reply->id,
-                        'graph_id' => $reply->graph_message_id ?? ('reply_' . $reply->id),
-                        'subject' => 'Re: ' . $message->subject,
-                        'from_email' => 'agent@example.com', // or get from user table
-                        'from_name' => 'You', // or get from user table
-                        'received_at' => $reply->sent_at,
-                        'body_html' => $reply->body_html,
-                        'body_text' => strip_tags($reply->body_html),
-                        'is_read' => true, // replies are always read
-                        'timestamp' => $reply->sent_at ? $reply->sent_at->timestamp : 0,
-                        'reply_type' => $reply->kind,
-                        'status' => $reply->status,
-                    ];
-                }
             }
     
             // Sort all messages by timestamp

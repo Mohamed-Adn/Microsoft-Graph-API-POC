@@ -23,6 +23,7 @@ Route::middleware('web')->group(function () {
     // Add this sync route
     Route::get('/sync', function () {
         if (!session()->has('access_token')) {
+            
             return redirect()->route('login');
         }
         
