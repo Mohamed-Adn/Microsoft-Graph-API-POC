@@ -16,6 +16,7 @@ Route::post('/logout',  [AuthController::class, 'logout'])->name('logout');
 // Mail features
 Route::middleware('web')->group(function () {
     Route::get('/inbox',   [MailController::class, 'inbox'])->name('inbox');
+    Route::get('/conversations', [MailController::class, 'conversations'])->name('conversations');
     Route::get('/message', [MailController::class, 'message'])->name('message');
     Route::get('/thread',  [MailController::class, 'thread'])->name('thread');
 

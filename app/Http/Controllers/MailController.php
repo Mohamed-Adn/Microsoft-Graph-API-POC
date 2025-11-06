@@ -8,10 +8,21 @@ use Illuminate\Http\Request;
 
 class MailController extends Controller
 {
-    public function home()
+    public function home(GraphMailSyncService $svc = null)
     {
         $authed = session()->has('access_token');
-        return view('home', compact('authed'));
+        $unreadCount = 0;
+        
+        // Only get unread count if user is authenticated and service is available
+        if ($authed && $svc) {
+            try {
+                $unreadCount = $svc->getUnreadCount();
+            } catch (\Exception $e) {
+                \Log::error('Failed to get unread count on home: ' . $e->getMessage());
+            }
+        }
+        
+        return view('home', compact('authed', 'unreadCount'));
     }
 
     public function inbox(GraphMailSyncService $svc)
@@ -51,8 +62,54 @@ class MailController extends Controller
     
         // Debug: Log final groups
         \Log::info('Final groups count: ' . count($groups));
+
+        // Get unread count for sidebar
+        $unreadCount = $svc->getUnreadCount();
     
-        return view('inbox', compact('groups'));
+        return view('inbox', compact('groups', 'unreadCount'));
+    }
+
+    public function conversations(GraphMailSyncService $svc)
+    {
+        // Auto-check for new messages
+        try {
+            $newCount = $svc->fetchNewMessages();
+            if ($newCount > 0) {
+                \Log::info("Auto-detected {$newCount} new messages");
+            }
+        } catch (\Exception $e) {
+            \Log::error('Auto-refresh failed: ' . $e->getMessage());
+        }
+
+        $heads = $svc->getConversationListFromCache();
+
+        // Debug: Log what we got from cache
+        \Log::info('Cache heads count: ' . count($heads));
+
+        // 2) lazy rebuild from DB if cache is cold
+        if (empty($heads)) {
+            $svc->refreshConversationListCache();
+            $heads = $svc->getConversationListFromCache();
+            
+            // Debug: Log after refresh
+            \Log::info('After refresh heads count: ' . count($heads));
+        }
+
+        // 3) Group conversations for the conversations page
+        $groups = [];
+        foreach ($heads as $head) {
+            if (empty($head['conversation_id'])) { continue; }
+            $cid = $head['conversation_id'];
+            $groups[$cid] = [$head];
+        }
+
+        // Debug: Log final groups
+        \Log::info('Final groups count: ' . count($groups));
+
+        // Get unread count for sidebar
+        $unreadCount = $svc->getUnreadCount();
+
+        return view('conversations', compact('groups', 'unreadCount'));
     }
 
     public function thread(Request $req, GraphMailSyncService $svc)
@@ -86,21 +143,31 @@ class MailController extends Controller
         // 3) Mark messages as read when viewing the thread
         $svc->markConversationAsRead($cid);
 
-        return view('thread', compact('messages', 'cid'));
+        // Get unread count for sidebar
+        $unreadCount = $svc->getUnreadCount();
+
+        return view('thread', compact('messages', 'cid', 'unreadCount'));
     }
 
-    public function message(Request $req, GraphService $graph)
+    public function message(Request $req, GraphService $graph, GraphMailSyncService $svc)
     {
         $id = $req->query('id');
         abort_if(!$id, 400, 'Missing id');
         $q = http_build_query(['$select' => 'subject,from,receivedDateTime,body']);
         $res = $graph->graph('GET', "/me/messages/".rawurlencode($id)."?$q");
-        return view('message', ['m' => $res]);
+        
+        // Get unread count for sidebar
+        $unreadCount = $svc->getUnreadCount();
+        
+        return view('message', ['m' => $res, 'unreadCount' => $unreadCount]);
     }
 
-    public function sendForm()
+    public function sendForm(GraphMailSyncService $svc)
     {
-        return view('send');
+        // Get unread count for sidebar
+        $unreadCount = $svc->getUnreadCount();
+        
+        return view('send', compact('unreadCount'));
     }
 
     public function sendPost(Request $req, GraphService $graph)
@@ -118,11 +185,15 @@ class MailController extends Controller
         return redirect()->route('send.form')->with('ok', 'Sent!');
     }
 
-    public function replyForm(Request $req)
+    public function replyForm(Request $req, GraphMailSyncService $svc)
     {
         $id = $req->query('id');
         abort_if(!$id, 400, 'Missing id');
-        return view('reply', ['id' => $id]);
+        
+        // Get unread count for sidebar
+        $unreadCount = $svc->getUnreadCount();
+        
+        return view('reply', ['id' => $id, 'unreadCount' => $unreadCount]);
     }
 
     public function replyPost(Request $req, GraphService $graph)
@@ -152,11 +223,15 @@ class MailController extends Controller
         return back()->with('ok', 'Replied successfully.');
     }
 
-    public function replyAllForm(Request $req)
+    public function replyAllForm(Request $req, GraphMailSyncService $svc)
     {
         $id = $req->query('id');
         abort_if(!$id, 400, 'Missing id');
-        return view('replyAll', ['id' => $id]);
+        
+        // Get unread count for sidebar
+        $unreadCount = $svc->getUnreadCount();
+        
+        return view('replyAll', ['id' => $id, 'unreadCount' => $unreadCount]);
     }
 
     public function replyAllPost(Request $req, GraphService $graph)
